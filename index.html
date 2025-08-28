@@ -19,9 +19,6 @@
   .big{display:block;width:100%; padding:16px 18px; border-radius:16px; border:0; background:linear-gradient(180deg,#7c3aed,#6d28d9); color:#fff; font-weight:800; font-size:16px; letter-spacing:.2px; box-shadow:0 12px 36px rgba(124,58,237,.4);}
   .big:active{transform:translateY(1px)}
   .install{margin-top:12px; display:none; width:100%; padding:12px 16px; border-radius:14px; border:1px dashed #7c3aed66; color:#c9b6ff; background:#211a39; font-weight:700}
-  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
-  .tiny{flex:1; min-width:130px; padding:10px 12px; border-radius:12px; border:1px solid #33406c; background:#131a2e; color:#cbd5ff; font-weight:700}
-  .tip{font-size:13px;margin-top:8px}
   .error{color:var(--err);margin-top:8px}
   footer{margin-top:14px; font-size:13px; opacity:.65}
   input[type=file]{display:none}
@@ -34,19 +31,20 @@
     <button id="choose" class="big">เลือกไฟล์ PNG และแปลงอัตโนมัติ</button>
     <input id="file" type="file" accept="image/png" />
 
-    <button id="installBtn" class="install">ติดตั้งเป</button>
+    <button id="installBtn" class="install">ติดตั้งเป็นแอปใน Chrome</button>
     <p id="err" class="error"></p>
+    <footer>ทำงานออฟไลน์เมื่อโฮสต์ผ่าน HTTPS + Service Worker • เพิ่มลงหน้าจอหลักได้ (PWA)</footer>
   </main>
 
 <script>
-// ---- PWA: register service worker ----
+// ---- PWA: register service worker (ต้องมีไฟล์ sw.js อยู่ที่รากเดียวกัน) ----
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(console.warn);
   });
 }
 
-// ---- beforeinstallprompt (show custom install button) ----
+// ---- beforeinstallprompt (แสดงปุ่มติดตั้งเมื่อพร้อม) ----
 let deferredPrompt = null;
 const installBtn = document.getElementById('installBtn');
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -62,51 +60,23 @@ installBtn.addEventListener('click', async () => {
   installBtn.style.display = 'none';
 });
 
+// ---- PNG → TGA (32-bit, Top-Left origin) ----
 const $file = document.getElementById('file');
 const $choose = document.getElementById('choose');
 const $err = document.getElementById('err');
-const $clear = document.getElementById('clear');
-const $sample = document.getElementById('sample');
 
 $choose.addEventListener('click', () => $file.click());
 $file.addEventListener('change', () => { if ($file.files[0]) runConvert($file.files[0]); });
 
-$clear.addEventListener('click', () => {
-  $file.value = '';
-  $err.textContent = '';
-});
-
-$sample.addEventListener('click', () => {
-  // create a simple 64x64 checker PNG on the fly and convert without using <input>
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const x = c.getContext('2d');
-  for (let y=0;y<8;y++){
-    for (let z=0;z<8;z++){
-      x.fillStyle = (y+z)%2 ? '#7c3aed' : '#111827';
-      x.fillRect(z*8,y*8,8,8);
-    }
-  }
-  c.toBlob((blob)=>{
-    if (!blob) return;
-    const f = new File([blob], 'sample.png', {type:'image/png'});
-    runConvert(f);
-  }, 'image/png');
-});
-
 function encodeTGA(imgData, width, height){
-  // Always export 32-bit BGRA, top-left origin
-  const bytesPerPixel = 4;
   const header = new Uint8Array(18);
-  header[2] = 2; // uncompressed true-color
-  header[12] = width & 0xFF;
-  header[13] = (width>>8) & 0xFF;
-  header[14] = height & 0xFF;
-  header[15] = (height>>8) & 0xFF;
-  header[16] = 32; // pixel depth
-  header[17] = 0x20 | 8; // top-left origin + 8 attr bits (alpha)
+  header[2] = 2; // true-color
+  header[12] = width & 0xFF;  header[13] = (width>>8) & 0xFF;
+  header[14] = height & 0xFF; header[15] = (height>>8) & 0xFF;
+  header[16] = 32; // 32-bit
+  header[17] = 0x20 | 8; // Top-Left + alpha bits
 
-  const out = new Uint8Array(18 + width*height*bytesPerPixel);
+  const out = new Uint8Array(18 + width*height*4);
   out.set(header, 0);
   const dst = out.subarray(18);
   const src = imgData.data; // RGBA
@@ -114,7 +84,7 @@ function encodeTGA(imgData, width, height){
   for(let y=0; y<height; y++){
     for(let x=0; x<width; x++){
       const si = (y*width + x) * 4;
-      const di = (y*width + x) * bytesPerPixel;
+      const di = (y*width + x) * 4;
       dst[di]   = src[si+2]; // B
       dst[di+1] = src[si+1]; // G
       dst[di+2] = src[si];   // R
@@ -150,7 +120,6 @@ async function runConvert(file){
       URL.revokeObjectURL(a.href);
       a.remove();
       URL.revokeObjectURL(url);
-      // reset input for mobile so same file can be selected again
       $file.value = '';
     };
     img.onerror = () => { throw new Error('ไม่สามารถเปิดภาพได้'); };
@@ -161,5 +130,29 @@ async function runConvert(file){
   }
 }
 </script>
+
+<!-- 🧩 สร้างไฟล์ 2 ไฟล์นี้ข้างๆ index.html เพื่อรองรับ Add to Home Screen:
+1) manifest.webmanifest
+{
+  "name": "PNG → TGA (Auto)",
+  "short_name": "PNG→TGA",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0f17",
+  "theme_color": "#7c3aed",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
+
+2) sw.js (service worker)
+const CACHE = 'png2tga-v1';
+const ASSETS = [ './', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png' ];
+self.addEventListener('install', e=>{ e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS))); });
+self.addEventListener('activate', e=>{ e.waitUntil((async()=>{ const keys=await caches.keys(); await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))); self.clients.claim(); })()); });
+self.addEventListener('fetch', e=>{ const u=new URL(e.request.url); if(u.origin===location.origin){ e.respondWith((async()=>{ const c=await caches.match(e.request); if(c) return c; const r=await fetch(e.request); if(e.request.method==='GET' && r.status===200){ (await caches.open(CACHE)).put(e.request, r.clone()); } return r; })()); }});
+
+ไอคอน: วางที่ icons/icon-192.png และ icons/icon-512.png -->
 </body>
 </html>
